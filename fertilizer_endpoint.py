@@ -1,7 +1,7 @@
 """
 protectionendpoint.py (v1)
 -----------------------
-FastAPI route: POST /crop-protection
+FastAPI route: POST /fertilizer-info
 x402-avm payment gate: $0.04 USDC on Algorand mainnet
 
 Payment flow (M2M / direct x402):
@@ -168,7 +168,7 @@ class CropProtectionRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @app.post(
-    "/crop-protection",
+    "/fertilizer-info",
     responses={
         402: {
             "description": "Payment Required. A cryptographically signed Algorand transaction proof for $0.04 USDC must be provided in the X-PAYMENT header."
@@ -211,7 +211,7 @@ async def crop_protection(request: Request, body: CropProtectionRequest):
 @app.get("/health")
 @app.head("/health")
 async def health():
-    return {"status": "ok", "endpoint": "crop-protection", "price_usdc": "0.04"}
+    return {"status": "ok", "endpoint": "fertilizer-info", "price_usdc": "0.04"}
 
 # ---------------------------------------------------------------------------
 # Discovery endpoint (unpaid - for Bazaar indexing)
@@ -222,7 +222,7 @@ async def index():
     return {
         "name": "AgriIntel Fertilizer API",
         "version": "1.0.0",
-        "endpoint": "POST /crop-protection",
+        "endpoint": "POST /fertilizer-info",
         "price": "$0.04 USDC",
         "network": "Algorand mainnet",
         "payment": "x402 (X-PAYMENT header)",
