@@ -97,7 +97,7 @@ routes: dict[str, RouteConfig] = {
             "waiting periods, and safe dosage metrics."
         ),
         mime_type="application/json",
-        resource="https://agriintellect.site/crop-protection",
+        resource="https://agriintellect.site/fertilizer-info",
         extensions=declare_discovery_extension(
             
             input={
