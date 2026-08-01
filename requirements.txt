@@ -1,0 +1,15 @@
+# Web API
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+pydantic>=2.7,<3.0
+
+# x402 payment gate with FastAPI, Algorand AVM, and Bazaar extensions
+x402-avm[fastapi,avm,extensions]==2.0.2
+
+# Gemini SDK used by fertilizermodule.py
+google-genai>=1.0,<2.0
+
+# Live brand lookup used by brand_mapper.py
+requests>=2.32,<3.0
+beautifulsoup4==4.15.0
+ddgs==9.14.4
