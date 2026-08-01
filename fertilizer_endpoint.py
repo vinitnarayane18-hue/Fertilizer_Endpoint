@@ -77,7 +77,7 @@ server.register(AVM_NETWORK, ExactAvmServerScheme())
 server.register_extension(bazaar_resource_server_extension)
 
 routes: dict[str, RouteConfig] = {
-    "POST /crop-protection": RouteConfig(
+    "POST /fertilizer-info": RouteConfig(
         accepts=[
             PaymentOption(
                 scheme="exact",
