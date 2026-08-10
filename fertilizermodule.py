@@ -22,6 +22,29 @@ from difflib import SequenceMatcher
 from typing import Optional, List, Tuple, Set, Dict
 import sys
 import os
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        env_path = args[0] if args else kwargs.get("dotenv_path")
+        if not env_path or not os.path.exists(env_path):
+            return False
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                os.environ.setdefault(key, value)
+        return True
+
+# --- LOAD LOCAL ENVIRONMENT FILE ---
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
 # --- SAFELY IMPORT BRAND MAPPER ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -38,6 +61,7 @@ except Exception as e:
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 DB_PATH = "farmyworth_agri_v1fin.db"
+DIY_RECIPES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diy_recipes.json")
 
 # Similarity threshold for fuzzy crop/pest matching (0-100)
 FUZZY_THRESHOLD = 72
@@ -396,24 +420,44 @@ def fetch_live_brands_from_scraper(rows: list, overlap_keys: set = None, max_liv
     live_brands = {}
     live_scrapes_done = 0
 
+    # BUG FIX: previously this loop `break`-ed entirely once 4 chemicals had
+    # been processed -- and it counted a chemical as "scraped" even when
+    # ddgs wasn't installed and Layer B failed instantly with no network
+    # call at all. That meant CIBRC data (Layer A, which is local/free/
+    # unlimited) silently stopped being looked up after the first 4
+    # chemicals, so the 5th+ insecticide/bio_pesticide in any response came
+    # back with empty brands/companies even though CIBRC had a real match.
+    #
+    # Fix: CIBRC + cache lookup now runs for EVERY chemical, no cap, no
+    # break. Only the actual outbound web-scrape (Layer B, ddgs/BigHaat) is
+    # throttled -- and only counted against the budget when a real HTTP
+    # request went out (get_brand now reports this via did_network_scrape).
     for raw_chem in target_chems:
         brands = set()
         companies = set()
-        
+
         try:
-            # --- FIX: Clean the query BEFORE we pass it to the scraper! ---
+            # --- Clean the query BEFORE we pass it to the scraper! ---
             clean_query = _simplify_chemical_for_search(raw_chem)
             if len(clean_query) < 3:
-                clean_query = raw_chem # Fallback if stripped completely
-                
-            # Let brand_mapper check cache OR scrape using the CLEAN, SEO-friendly query
-            matches = get_brand(clean_query, use_cache=True)
-            
-            is_cached = False
+                clean_query = raw_chem  # Fallback if stripped completely
+
+            # Let brand_mapper check cache/CIBRC always, but only allow a
+            # live web scrape if we haven't used up the scrape budget yet.
+            result = get_brand(
+                clean_query,
+                use_cache=True,
+                allow_scrape=(live_scrapes_done < max_live_scrapes),
+            )
+            matches = result.get("brand_matches", [])
+            cibrc = result.get("cibrc_matches", [])
+
             for m in matches:
                 if m.get("brand_name"): brands.add(m.get("brand_name").strip())
                 if m.get("company"): companies.add(m.get("company").strip())
-                if m.get("source") == "cache": is_cached = True
+
+            for c in cibrc:
+                if c.get("company"): companies.add(c.get("company").strip())
 
             # Store the data under the RAW CIBRC chemical name so the formatter maps it correctly!
             live_brands[raw_chem] = {
@@ -421,22 +465,74 @@ def fetch_live_brands_from_scraper(rows: list, overlap_keys: set = None, max_liv
                 "companies": list(companies)
             }
 
-            # Only increment network scrapes if it actually hit the internet
-            if not is_cached:
+            # Only increment the scrape budget if an actual HTTP request
+            # went out -- an instant ImportError (ddgs missing) or a cache
+            # hit must NOT count against it.
+            if result.get("did_network_scrape"):
                 live_scrapes_done += 1
-
-            # Stop live scraping if we hit the limit to prevent 429 IP Bans
-            if live_scrapes_done >= max_live_scrapes:
-                break
 
         except Exception as e:
             print(f"[SCRAPER ERROR] Failed for {raw_chem}: {e}")
             live_brands[raw_chem] = {"brands": [], "companies": []}
-            live_scrapes_done += 1
-            if live_scrapes_done >= max_live_scrapes:
-                break
+            # Don't touch live_scrapes_done here either -- this failure
+            # didn't consume any network budget, so it shouldn't block
+            # CIBRC lookups for the remaining chemicals.
 
     return live_brands
+
+_diy_recipes_cache = None
+
+def _load_diy_recipes() -> list:
+    """Loads diy_recipes.json once and caches it in memory (small file, no
+    need to hit disk on every request)."""
+    global _diy_recipes_cache
+    if _diy_recipes_cache is None:
+        try:
+            with open(DIY_RECIPES_PATH, "r", encoding="utf-8") as f:
+                _diy_recipes_cache = json.load(f)
+        except FileNotFoundError:
+            print(f"[WARNING] diy_recipes.json not found at {DIY_RECIPES_PATH} -- DIY suggestions skipped.")
+            _diy_recipes_cache = []
+    return _diy_recipes_cache
+
+
+def get_diy_matches(chemical_name: str, pest_normalized: str, category: str, max_matches: int = 2) -> list:
+    """
+    Matches a CIBRC chemical (e.g. "Azadirachtin 00.03% WSP...") to any
+    homemade/DIY recipes that target the same pest/disease -- via simple
+    tag overlap, since the chemical's technical name and the recipe's folk
+    name (e.g. "Nimastra") never match by string.
+
+    Only returns matches for bio_pesticide -- chemical (synthetic)
+    insecticides/fungicides intentionally get NO diy match (they can't be
+    home-made and shouldn't imply that they can).
+    """
+    if category != "bio_pesticide":
+        return []
+
+    recipes = _load_diy_recipes()
+    if not recipes:
+        return []
+
+    chem_lower = chemical_name.lower()
+    pest_lower = (pest_normalized or "").lower()
+
+    scored = []
+    for recipe in recipes:
+        tags = recipe.get("match_tags", [])
+        score = 0
+        for tag in tags:
+            tag_word = tag.replace("_", " ")
+            if tag in chem_lower or tag_word in chem_lower:
+                score += 2  # chemical-name match is a stronger signal
+            if tag in pest_lower or tag_word in pest_lower or pest_lower in tag:
+                score += 1
+        if score > 0:
+            scored.append((score, recipe))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in scored[:max_matches]]
+
 
 def _clean_field(val) -> Optional[str]:
     if val is None: return None
@@ -595,6 +691,7 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "brands": brands,
             "companies": companies,
             "has_brand_info": (len(brands) > 0) or (len(companies) > 0),
+            "diy_homemade_options": get_diy_matches(chem_name, pest_norm, category),
         }
 
     for entry in seen_chem_keys.values():
@@ -646,11 +743,11 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
 if __name__ == "__main__":
     print("Testing Symptom Bypass (Layer 2 Fallback)")
     payload= {
-  "crop": "kapas",
-  "pest": None,
-  "symptom": "झाडावर पांढरी माशी आणि पानांवर चिकटा पडलाय",
+  "crop": "cotton",
+  "pest": "jassids",
+  "symptom": None,
   "category_intent": None,
-  "missing_info": None
+  "missing_info": False
 }
     
     # Needs a dummy DB to run locally, but outputs logic validation.
