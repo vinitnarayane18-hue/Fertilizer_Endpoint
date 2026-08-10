@@ -1,0 +1,129 @@
+[
+  {
+    "id": "nimastra",
+    "name": "Nimastra (Neem Astra - 5% Solution)",
+    "purpose": "Controlling sucking pests (Aphids, Jassids, Thrips, Whiteflies) and early-stage small caterpillars",
+    "target_crops": ["Cotton", "Soybean", "Onion", "Chilli", "Tomato", "Vegetables", "Pomegranate"],
+    "match_tags": ["neem", "azadirachtin", "sucking_pest", "aphid", "whitefly", "thrips"],
+    "ingredients": ["Fresh Neem leaves (crushed/paste) - 5 kg", "Local Cow Urine (Gomutra) - 5 Liters", "Fresh Cow Dung - 2 kg", "Water - 100 Liters"],
+    "steps": ["Mix crushed neem leaves, cow urine, and cow dung in 100L water in a plastic drum", "Stir clockwise twice a day for 48 hours in the shade", "Strain through a thin cloth", "Spray directly without dilution (100L/acre) using a knapsack sprayer"]
+  },
+  {
+    "id": "agniastra",
+    "name": "Agniastra (Fire Extract)",
+    "purpose": "Controlling stubborn caterpillars (Pod borers, Pink bollworms, Leaf rollers, Stem borers)",
+    "target_crops": ["Cotton", "Soybean", "Gram", "Paddy", "Sugarcane", "Tomato", "Brinjal"],
+    "match_tags": ["pod_borer", "bollworm", "stem_borer", "caterpillar", "leaf_folder"],
+    "ingredients": ["Crushed Neem leaves paste - 2 kg", "Spicy Green Chilli paste - 500 g", "Garlic paste - 500 g", "Tobacco powder/leaves paste - 250 g", "Local Cow Urine - 10 Liters"],
+    "steps": ["Combine all ingredients in a copper/earthen pot or steel vessel", "Boil on low heat for 15 minutes, cool, let sit for 48 hours", "Filter using a cloth", "Mix 2-3 Liters in 100 Liters water per acre"]
+  },
+  {
+    "id": "dashparni_ark",
+    "name": "Dashparni Ark (10-Leaf Extract)",
+    "purpose": "Broad-spectrum bio-pesticide against all chewing, biting, and sucking insects",
+    "target_crops": ["Cotton", "Soybean", "Pomegranate", "Grapes", "Citrus", "Vegetables", "Sugarcane"],
+    "match_tags": ["broad_spectrum", "sucking_pest", "chewing_pest", "azadirachtin"],
+    "ingredients": ["Cow Urine - 20 Liters", "Fresh Cow Dung - 2 kg", "Leaves of 10 local plants (2 kg each): Neem, Custard Apple, Papaya, Castor, Guduchi, Lantana, Pongamia, Calotropis, Nerium, Bael", "Green Chilli paste - 1 kg", "Garlic paste - 500 g", "Turmeric powder - 200 g"],
+    "steps": ["Mix all in a 200L drum", "Cover with cloth, ferment 30-40 days (stir daily)", "Strain", "Mix 6 Liters in 200 Liters water/acre. Storeable up to 6 months"]
+  },
+  {
+    "id": "nske_5",
+    "name": "NSKE 5% (Neem Seed Kernel Extract)",
+    "purpose": "Anti-feedant, insect growth regulator, egg disruptor for Bollworms, Spodoptera, Mites, Thrips",
+    "target_crops": ["Cotton", "Soybean", "Onion", "Vegetables", "Pulses"],
+    "match_tags": ["neem", "azadirachtin", "bollworm", "spodoptera", "mites", "thrips"],
+    "ingredients": ["Crushed Neem Seed Kernels - 5 kg", "Soap powder/Liquid Soap - 200 g", "Water - 100 Liters"],
+    "steps": ["Soak 5kg crushed neem seed powder in 10L water overnight", "Squeeze through cloth to collect clear light-brown liquid", "Dilute with 90L water, add 200g soap as sticker", "Spray immediately on foliage"]
+  },
+  {
+    "id": "brahmastra",
+    "name": "Brahmastra (5-Leaf Extract)",
+    "purpose": "Control of medium-sized caterpillars, sucking pests, and leaf miners",
+    "target_crops": ["Pomegranate", "Grapes", "Tomato", "Chilli", "Cotton", "Gram"],
+    "match_tags": ["caterpillar", "sucking_pest", "leaf_miner"],
+    "ingredients": ["Crushed Neem leaves - 3 kg", "Crushed Custard Apple leaves - 2 kg", "Crushed Papaya leaves - 2 kg", "Crushed Castor leaves - 2 kg", "Crushed Guava/Pomegranate leaves - 2 kg", "Cow Urine - 10 Liters"],
+    "steps": ["Mix leaves with cow urine, boil 20 minutes", "Keep covered 48 hours, strain", "Mix 2.5-3 Liters in 100 Liters water"]
+  },
+  {
+    "id": "tikhat_lasun_ark",
+    "name": "Tikhat-Lasun Ark (Chilli, Garlic & Ginger Spray)",
+    "purpose": "Fast knockdown spray against Aphids, Jassids, Thrips, Spider Mites",
+    "target_crops": ["Onion", "Garlic", "Chilli", "Capsicum", "Brinjal", "Tomato"],
+    "match_tags": ["sucking_pest", "aphid", "jassid", "thrips", "mites"],
+    "ingredients": ["Spicy Green Chilli paste - 500 g", "Garlic paste - 250 g", "Ginger paste - 100 g", "Kerosene/Soap solution - 50 ml", "Water - 100 Liters"],
+    "steps": ["Blend chilli, garlic, ginger with 2L water, soak overnight", "Filter out solids", "Add soap water, dilute to 100 Liters", "Spray thoroughly morning or late evening"]
+  },
+  {
+    "id": "tambe_tak",
+    "name": "Tambe-Tak / Khadat Tak Spray (Copper-Fermented Buttermilk)",
+    "purpose": "Organic fungicide for Powdery Mildew, Downy Mildew, Leaf Spots, Bacterial Blight, Citrus Canker",
+    "target_crops": ["Pomegranate", "Grapes", "Onion", "Tomato", "Cucurbits", "Citrus"],
+    "match_tags": ["fungal", "powdery_mildew", "downy_mildew", "leaf_spot", "bacterial_blight", "pseudomonas", "bacillus"],
+    "ingredients": ["Sour Buttermilk - 5 Liters", "Copper piece/coil/wire - 1 piece", "Water - 100 Liters"],
+    "steps": ["Place sour buttermilk in earthen pot, immerse copper wire/vessel", "Cover, ferment 10-15 days until milk turns greenish-blue", "Remove copper wire, dilute 5L in 100L water, spray"]
+  },
+  {
+    "id": "wood_ash_lime",
+    "name": "Wood Ash & Lime Dusting",
+    "purpose": "Repelling Flea beetles, Cutworms, Ants, Caterpillars; suppressing fungal spores",
+    "target_crops": ["Brinjal", "Cabbage", "Cauliflower", "Okra", "Onion", "Cucurbits"],
+    "match_tags": ["caterpillar", "fungal", "beetle"],
+    "ingredients": ["Fine Wood Ash (sifted) - 10 kg", "Slaked Lime - 1 kg"],
+    "steps": ["Mix dry wood ash and slaked lime thoroughly", "Dust directly onto morning dew-drenched crop leaves"]
+  },
+  {
+    "id": "tobacco_extract",
+    "name": "Tobacco Extract (Nikotin Spray)",
+    "purpose": "Eradicating hardy caterpillars, mealybugs, and thrips",
+    "target_crops": ["Cotton", "Tobacco", "Ornamentals", "Vegetables"],
+    "warning": "Avoid on Solanaceous family (Tomato/Potato) due to Tobacco Mosaic Virus risk",
+    "match_tags": ["caterpillar", "mealybug", "thrips"],
+    "ingredients": ["Tobacco waste/powder - 1 kg", "Soap solution - 100 g", "Water - 10 Liters"],
+    "steps": ["Boil tobacco powder in 10L water for 30 min", "Strain, dilute to 100L water with soap"]
+  },
+  {
+    "id": "jeevamrut",
+    "name": "Jeevamrut (Liquid Bio-Fertilizer / Microbe Culture)",
+    "purpose": "Multiplies soil beneficial microbes, fixes Nitrogen, solubilizes Phosphorus & Potassium, enhances root growth",
+    "target_crops": ["All Crops"],
+    "match_tags": ["pseudomonas", "bacillus", "trichoderma", "soil_microbe", "growth_booster"],
+    "ingredients": ["Fresh Cow Dung - 10 kg", "Fresh Cow Urine - 10 Liters", "Jaggery - 2 kg", "Gram/Besan flour - 2 kg", "Fertile/Forest soil - 250 g", "Water - 200 Liters"],
+    "steps": ["Mix all in 200L water in shaded drum", "Stir clockwise 5 min twice daily for 5-7 days", "Apply 200L/acre via drip, drenching, or flood irrigation every 15-20 days"]
+  },
+  {
+    "id": "beejamrut",
+    "name": "Beejamrut (Organic Seed Treatment Culture)",
+    "purpose": "Protects seeds/seedlings against soil-borne fungal diseases (Fusarium wilt, Root rot) and promotes germination",
+    "target_crops": ["Cotton", "Soybean", "Gram", "Wheat", "Paddy", "Potato", "Sugarcane"],
+    "match_tags": ["fungal", "wilt", "root_rot", "seed_treatment", "trichoderma"],
+    "ingredients": ["Fresh Cow Dung - 5 kg", "Cow Urine - 5 Liters", "Cow Milk - 50 ml", "Lime - 50 g", "Native fertile soil - 1 handful", "Water - 20 Liters"],
+    "steps": ["Mix cow dung tied in cloth in 20L water overnight, squeeze liquid", "Add urine, milk, lime water, soil, stir well", "Smear over seeds before sowing, air-dry 30 min, sow immediately"]
+  },
+  {
+    "id": "hing_halad_ark",
+    "name": "Hing-Halad Ark (Asafoetida & Turmeric Bio-Fungicide)",
+    "purpose": "Broad-spectrum antifungal & antiviral spray",
+    "target_crops": ["Tomato", "Chilli", "Onion", "Potato", "Pomegranate", "Papaya", "Cucurbits"],
+    "match_tags": ["fungal", "powdery_mildew", "downy_mildew", "mosaic_virus", "bacterial_blight"],
+    "ingredients": ["Asafoetida powder/gum - 100 g", "Turmeric powder - 250 g", "Fresh Cow Milk - 2 Liters", "Water - 100 Liters"],
+    "steps": ["Dissolve asafoetida in 1L warm water overnight", "Mix turmeric into 2L milk", "Combine both into 100L water", "Spray to prevent Powdery/Downy Mildew, Leaf Curl Virus, Bacterial Spot"]
+  },
+  {
+    "id": "sonth_doodh_ark",
+    "name": "Sonth-Doodh Ark (Ginger Powder & Milk Bio-Fungicide)",
+    "purpose": "Antifungal spray, alternative to Copper/Sulfur",
+    "target_crops": ["Pomegranate", "Grapes", "Tomato", "Potato", "Onion", "Cucurbits"],
+    "match_tags": ["fungal", "blight", "downy_mildew", "rust"],
+    "ingredients": ["Dry Ginger Powder - 200 g", "Fresh Cow Milk - 2 Liters", "Water - 100 Liters"],
+    "steps": ["Boil ginger powder in 2L water till reduced to 1L, cool", "Boil milk separately, cool, remove cream", "Mix both into 100L water", "Spray within 24 hrs of preparation"]
+  },
+  {
+    "id": "karanj_neem_extract",
+    "name": "Karanj-Neem Extract",
+    "purpose": "Bio-insecticide against hard-shell & soil borers",
+    "target_crops": ["Sugarcane", "Cotton", "Soybean", "Groundnut", "Pulses"],
+    "match_tags": ["stem_borer", "termite", "white_grub", "nematodes", "neem"],
+    "ingredients": ["Crushed Karanj seeds/leaves - 3 kg", "Crushed Neem seeds/leaves - 3 kg", "Cow Urine - 5 Liters", "Water - 100 Liters"],
+    "steps": ["Soak crushed Karanj and Neem in 5L cow urine for 5 days", "Filter, dilute into 100L water", "Spray on foliage or drench near roots"]
+  }
+]
