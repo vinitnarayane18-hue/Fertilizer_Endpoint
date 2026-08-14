@@ -1,37 +1,20 @@
 #!/usr/bin/env python3
 """
 brand_mapper.py -- Chemical/active-ingredient naam (jaise "Trichoderma
-viride") se REAL MARKET BRAND NAME dhundhta hai, ab ek naya trusted layer
-ke saath: CIB&RC (Central Insecticides Board & Registration Committee) ki
-apni official biopesticide registry (cibrc_registry.json, jo
-parse_cibrc_registry.py se banti hai) -- yeh real, legally-verified
-government data hai, web-scrape se pehle check hota hai.
+viride") se REAL MARKET BRAND NAME dhundhta hai.
 
-NAYA FALLBACK ORDER (3 layers)
+FLOW (single layer: web scrape)
 --------------------------------
-Layer A -- CIBRC Registry (local, deterministic, government-verified):
-    Fuzzy match chemical naam ko cibrc_registry.json ke 'pesticide' field
-    se. Milta hai to REAL, LEGALLY-REGISTERED company list milti hai --
-    lekin CIBRC registry sirf company/formulation/section batati hai,
-    RETAIL BRAND NAME nahi (jaise "Bavistin"). Isliye:
+1. Cache check (brand_names.db) -- agar pehle scrape ho chuka hai to
+   wahi cached result use hota hai, koi naya HTTP request nahi jaata.
+2. Live scrape (BigHaat.com) -- cache miss hone par ddgs se BigHaat.com
+   pe chemical search hota hai, matching product pages fetch/parse
+   hoti hain, aur brand/company naam extract karke cache mein save
+   ho jaata hai.
 
-Layer B -- Brand-name web scrape (BigHaat.com):
-    Trusted e-commerce se retail brand name dhundo. Agar CIBRC se company
-    list mil chuki hai, to scrape result ko us list se cross-verify karo --
-    agar scraped product ki company CIBRC list me bhi hai, to confidence
-    zyada high hoti hai (verified match), warna bhi result dikhta hai
-    lekin "unverified_company" flag ke saath.
-
-Layer C -- Raw CIBRC info as last resort:
-    Agar Layer B kuch nahi deta (scrape fail, ya library missing), to bhi
-    Layer A ka result khali mat chhodo -- kam se kam yeh batao ki chemical
-    legally kis company/formulation ke naam se CIBRC-registered hai, taaki
-    farmer/system ko pata ho ki yeh ek asli, registered product hai, sirf
-    retail brand name nahi mila.
-
-Agar Layer A bhi kuch nahi deta (chemical registry me hi nahi hai), tab
-purane wale pure-scrape flow pe fall back hota hai -- kabhi bhi silently
-empty result nahi deta bina kuch try kiye.
+NOTE: CIBRC government-registry cross-check layer hata di gayi hai
+(cibrc_registry.json delete ho chuka tha, isliye woh layer hamesha
+khaali result deta tha -- ab pure web-scrape flow hi chalta hai).
 
 Requirements (apne local machine pe):
     pip install requests beautifulsoup4 ddgs
@@ -40,9 +23,6 @@ Requirements (apne local machine pe):
 import re
 import sqlite3
 import time
-import json
-import os
-import difflib
 
 import requests
 from bs4 import BeautifulSoup
@@ -54,64 +34,10 @@ TRUSTED_STORES = {
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BrandMapperBot/1.0)"}
 
 DB_PATH = "brand_names.db"
-CIBRC_REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "cibrc_registry.json")
-
-_STOP_WORDS = {"var", "of", "the", "and"}
 
 
 # ---------------------------------------------------------------------------
-# LAYER A: CIBRC Registry lookup (real, government-verified, local, fast)
-# ---------------------------------------------------------------------------
-def _load_cibrc_registry() -> list[dict]:
-    if not os.path.isfile(CIBRC_REGISTRY_PATH):
-        return []
-    with open(CIBRC_REGISTRY_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _fuzzy_score(query: str, candidate: str) -> float:
-    """Same word-overlap + sequence-ratio approach used elsewhere in this
-    project's fuzzy matching (proven more reliable than raw SequenceMatcher
-    alone for short technical names with word-order/spelling variance)."""
-    query_words = {w for w in query.lower().split() if w not in _STOP_WORDS and len(w) > 2}
-    candidate_words = {w for w in candidate.lower().split() if w not in _STOP_WORDS}
-
-    if query_words:
-        matched = sum(
-            1 if (qw in candidate_words or any(qw in cw or cw in qw for cw in candidate_words))
-            else (0.5 if difflib.get_close_matches(qw, candidate_words, n=1, cutoff=0.8) else 0)
-            for qw in query_words
-        )
-        word_score = matched / len(query_words)
-    else:
-        word_score = 0.0
-
-    seq_score = difflib.SequenceMatcher(None, query.lower(), candidate.lower()).ratio()
-    return max(word_score, seq_score)
-
-
-def lookup_cibrc_registry(chemical: str, min_score: float = 0.7) -> list[dict]:
-    """Fuzzy-matches `chemical` against every registry entry's 'pesticide'
-    field. Returns ALL matches above min_score, sorted best-first --
-    a chemical is often registered under multiple companies."""
-    registry = _load_cibrc_registry()
-    if not registry:
-        return []
-
-    scored = []
-    for entry in registry:
-        if entry.get("status") != "parsed":
-            continue
-        score = _fuzzy_score(chemical, entry.get("pesticide", ""))
-        if score >= min_score:
-            scored.append({**entry, "match_score": round(score, 3)})
-
-    scored.sort(key=lambda e: e["match_score"], reverse=True)
-    return scored
-
-
-# ---------------------------------------------------------------------------
-# LAYER B: Brand-name web scrape (unchanged core logic from before)
+# Brand-name web scrape
 # ---------------------------------------------------------------------------
 def _extract_brand_company(title, page_text):
     brand, company = None, None
@@ -178,17 +104,6 @@ def search_brand(chemical, max_results=3, pause=1.5):
     return results
 
 
-def _cross_verify(scraped_company: str, cibrc_matches: list[dict]) -> bool:
-    """True if the scraped product's company plausibly matches one of the
-    CIBRC-registered companies for this chemical -- boosts confidence."""
-    if not scraped_company or not cibrc_matches:
-        return False
-    for entry in cibrc_matches:
-        if _fuzzy_score(scraped_company, entry.get("company", "")) >= 0.5:
-            return True
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Cache (unchanged from before)
 # ---------------------------------------------------------------------------
@@ -207,29 +122,28 @@ def _ensure_table(con):
 
 
 # ---------------------------------------------------------------------------
-# MAIN ENTRY POINT: 3-layer fallback
+# MAIN ENTRY POINT
 # ---------------------------------------------------------------------------
 def get_brand(chemical, db_path=DB_PATH, use_cache=True, force_refresh=False, allow_scrape=True):
     """
     Returns a dict with:
-      - "layer": which layer actually produced the result ("cibrc_registry",
-                 "web_scrape", "web_scrape_verified", or "cibrc_fallback")
+      - "layer": which layer actually produced the result ("web_scrape" or
+                 "none")
       - "brand_matches": list of scraped brand results (may be empty)
-      - "cibrc_matches": list of CIBRC-registered entries (may be empty)
+      - "cibrc_matches": always [] (CIBRC layer removed -- kept as a key
+        for backward compatibility with callers like fertilizermodule.py)
       - "did_network_scrape": True only if an actual HTTP request went out
-        (used by callers to throttle Layer B without also throttling the
-        free/local CIBRC lookup)
-    Never silently returns nothing if EITHER layer found something.
+        (used by callers to throttle live scraping)
 
-    allow_scrape=False skips Layer B entirely (used once a caller's live-
-    scrape budget is exhausted) -- Layer A (CIBRC) always runs regardless,
-    since it's local and costs nothing.
+    allow_scrape=False skips the live scrape entirely (used once a
+    caller's live-scrape budget is exhausted) -- cache is still checked.
     """
     con = sqlite3.connect(db_path)
     _ensure_table(con)
 
-    # LAYER A: CIBRC registry (fast, local, always tried first -- NEVER throttled)
-    cibrc_matches = lookup_cibrc_registry(chemical)
+    # CIBRC layer removed -- kept as empty list so downstream code
+    # (fertilizermodule.py's result.get("cibrc_matches", [])) still works.
+    cibrc_matches = []
 
     # Cache check (brand-name scrape results only)
     brand_matches = []
@@ -271,16 +185,7 @@ def get_brand(chemical, db_path=DB_PATH, use_cache=True, force_refresh=False, al
 
     con.close()
 
-    # Cross-verify scraped brands against CIBRC-registered companies
-    for match in brand_matches:
-        match["cibrc_verified"] = _cross_verify(match.get("company"), cibrc_matches)
-
-    if brand_matches:
-        layer = "web_scrape_verified" if any(m["cibrc_verified"] for m in brand_matches) else "web_scrape"
-    elif cibrc_matches:
-        layer = "cibrc_fallback"  # LAYER C: no retail brand found, but real registration data exists
-    else:
-        layer = "none"
+    layer = "web_scrape" if brand_matches else "none"
 
     return {
         "chemical": chemical,
@@ -300,16 +205,9 @@ if __name__ == "__main__":
     print(f"\nChemical queried : {result['chemical']}")
     print(f"Resolved via     : {result['layer']}")
 
-    if result["cibrc_matches"]:
-        print(f"\nCIBRC-registered entries found ({len(result['cibrc_matches'])}):")
-        for m in result["cibrc_matches"][:5]:
-            print(f"  - {m['pesticide']} | {m['company']} | {m.get('formulation')} | Section {m.get('section')} (match {m['match_score']})")
-
     if result["brand_matches"]:
         print(f"\nRetail brand matches found ({len(result['brand_matches'])}):")
         for m in result["brand_matches"]:
-            verified = " [CIBRC-VERIFIED COMPANY]" if m.get("cibrc_verified") else ""
-            print(f"  - Brand: {m.get('brand_name')} | Company: {m.get('company')} | {m.get('product_url')}{verified}")
-
-    if not result["cibrc_matches"] and not result["brand_matches"]:
-        print(f"\n'{chem}' -- koi match nahi mila CIBRC registry me na web scrape se.")
+            print(f"  - Brand: {m.get('brand_name')} | Company: {m.get('company')} | {m.get('product_url')}")
+    else:
+        print(f"\n'{chem}' -- koi match nahi mila web scrape se.")
