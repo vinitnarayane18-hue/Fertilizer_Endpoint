@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-brand_mapper.py -- Chemical/active-ingredient naam (jaise "Carbendazim 50%
-WP") se REAL MARKET BRAND NAME (jaise "Bavistin") dhundhta hai, taaki
-farmer ko "Carbendazim 50% WP" jaisa technical naam nahi, seedha dukaan
-me milne wala product naam bataya ja sake.
+brand_mapper.py -- Chemical/active-ingredient naam (jaise "Trichoderma
+viride") se REAL MARKET BRAND NAME dhundhta hai.
 
-Trusted source: BigHaat.com -- India ka verified agri e-commerce jaha
-har product page pe exact composition likha hota hai (govt-registered
-format ke bilkul match), isliye chemical-string se brand match karna
-reliable hai. (Aur sources baad me isi list me add kar sakte ho.)
+FLOW (single layer: web scrape)
+--------------------------------
+1. Cache check (brand_names.db) -- agar pehle scrape ho chuka hai to
+   wahi cached result use hota hai, koi naya HTTP request nahi jaata.
+2. Live scrape (BigHaat.com) -- cache miss hone par ddgs se BigHaat.com
+   pe chemical search hota hai, matching product pages fetch/parse
+   hoti hain, aur brand/company naam extract karke cache mein save
+   ho jaata hai.
 
-Alag database file me store hota hai: brand_names.db
-Table: chemical_brand_map (chemical, brand_name, company, product_url,
-                            matched_text, fetched_at)
+NOTE: CIBRC government-registry cross-check layer hata di gayi hai
+(cibrc_registry.json delete ho chuka tha, isliye woh layer hamesha
+khaali result deta tha -- ab pure web-scrape flow hi chalta hai).
 
 Requirements (apne local machine pe):
     pip install requests beautifulsoup4 ddgs
@@ -27,9 +29,6 @@ from bs4 import BeautifulSoup
 
 TRUSTED_STORES = {
     "bighaat.com": "BigHaat (verified agri e-commerce)",
-    # yaha aage aur verified agri-store domains add kar sakte ho,
-    # e.g. "agribegri.com", "dehaat.com" -- jab tak un par bhi
-    # composition-per-product listing verify na ho jaaye add mat karo.
 }
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BrandMapperBot/1.0)"}
@@ -37,27 +36,10 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BrandMapperBot/1.0)"}
 DB_PATH = "brand_names.db"
 
 
-def _ensure_table(con):
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS chemical_brand_map (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chemical TEXT,
-            brand_name TEXT,
-            company TEXT,
-            product_url TEXT,
-            matched_text TEXT,
-            fetched_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-
-
+# ---------------------------------------------------------------------------
+# Brand-name web scrape
+# ---------------------------------------------------------------------------
 def _extract_brand_company(title, page_text):
-    """
-    BigHaat title pattern zyada tar aisa hota hai:
-        "Buy <Brand> Fungicide by <Company> | ..."
-        "Shop <Brand> Fungicide - <composition> | BigHaat"
-    Aur body text me: "<Brand> Fungicide is a <Company> product containing ..."
-    """
     brand, company = None, None
 
     m = re.search(r"(?:Buy|Shop)\s+(.+?)\s+Fungicide\s+by\s+([\w\s]+?)\s*[|\-]", title, re.I)
@@ -77,7 +59,6 @@ def _extract_brand_company(title, page_text):
 
 
 def search_brand(chemical, max_results=3, pause=1.5):
-    """Trusted stores me se chemical composition se milta product dhundo."""
     try:
         from ddgs import DDGS
     except ImportError:
@@ -105,7 +86,7 @@ def search_brand(chemical, max_results=3, pause=1.5):
                     for tag in soup(["script", "style", "nav", "footer"]):
                         tag.decompose()
                     page_text = " ".join(soup.get_text(separator=" ").split())
-                except Exception as e:
+                except Exception:
                     title, page_text = h.get("title", ""), h.get("body", "")
 
                 brand, company = _extract_brand_company(title or "", page_text or "")
@@ -123,14 +104,49 @@ def search_brand(chemical, max_results=3, pause=1.5):
     return results
 
 
-def get_brand(chemical, db_path=DB_PATH, use_cache=True, force_refresh=False):
+# ---------------------------------------------------------------------------
+# Cache (unchanged from before)
+# ---------------------------------------------------------------------------
+def _ensure_table(con):
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS chemical_brand_map (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chemical TEXT,
+            brand_name TEXT,
+            company TEXT,
+            product_url TEXT,
+            matched_text TEXT,
+            fetched_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
+
+# ---------------------------------------------------------------------------
+# MAIN ENTRY POINT
+# ---------------------------------------------------------------------------
+def get_brand(chemical, db_path=DB_PATH, use_cache=True, force_refresh=False, allow_scrape=True):
     """
-    Pehle local cache (brand_names.db) me dekho, na mile to scrape karo
-    aur cache kar do. Returns: list of dict matches (best-first).
+    Returns a dict with:
+      - "layer": which layer actually produced the result ("web_scrape" or
+                 "none")
+      - "brand_matches": list of scraped brand results (may be empty)
+      - "cibrc_matches": always [] (CIBRC layer removed -- kept as a key
+        for backward compatibility with callers like fertilizermodule.py)
+      - "did_network_scrape": True only if an actual HTTP request went out
+        (used by callers to throttle live scraping)
+
+    allow_scrape=False skips the live scrape entirely (used once a
+    caller's live-scrape budget is exhausted) -- cache is still checked.
     """
     con = sqlite3.connect(db_path)
     _ensure_table(con)
 
+    # CIBRC layer removed -- kept as empty list so downstream code
+    # (fertilizermodule.py's result.get("cibrc_matches", [])) still works.
+    cibrc_matches = []
+
+    # Cache check (brand-name scrape results only)
+    brand_matches = []
     if use_cache and not force_refresh:
         cur = con.execute(
             "SELECT brand_name, company, product_url, matched_text "
@@ -139,37 +155,59 @@ def get_brand(chemical, db_path=DB_PATH, use_cache=True, force_refresh=False):
         )
         cached = cur.fetchall()
         if cached:
-            con.close()
-            return [
+            brand_matches = [
                 {"chemical": chemical, "brand_name": r[0], "company": r[1],
                  "product_url": r[2], "matched_text": r[3], "source": "cache"}
                 for r in cached
             ]
 
-    results = search_brand(chemical)
-    for r in results:
-        con.execute(
-            """INSERT INTO chemical_brand_map
-               (chemical, brand_name, company, product_url, matched_text)
-               VALUES (?,?,?,?,?)""",
-            (chemical, r.get("brand_name"), r.get("company"),
-             r.get("product_url"), r.get("matched_text")),
-        )
-    con.commit()
+    # LAYER B: web scrape (only if not already cached, allowed, AND ddgs installed)
+    did_network_scrape = False
+    if not brand_matches and allow_scrape:
+        try:
+            scraped = search_brand(chemical)
+            did_network_scrape = True  # a real HTTP round-trip actually happened
+            for r in scraped:
+                con.execute(
+                    """INSERT INTO chemical_brand_map
+                       (chemical, brand_name, company, product_url, matched_text)
+                       VALUES (?,?,?,?,?)""",
+                    (chemical, r.get("brand_name"), r.get("company"),
+                     r.get("product_url"), r.get("matched_text")),
+                )
+            con.commit()
+            brand_matches = scraped
+        except ImportError as e:
+            # ddgs not installed -- this is an instant local failure, NOT a
+            # network scrape, so did_network_scrape stays False and this
+            # never eats into the caller's scrape budget.
+            print(f"[warn] Layer B (web scrape) skipped: {e}")
+
     con.close()
-    return results
+
+    layer = "web_scrape" if brand_matches else "none"
+
+    return {
+        "chemical": chemical,
+        "layer": layer,
+        "brand_matches": brand_matches,
+        "cibrc_matches": cibrc_matches,
+        "did_network_scrape": did_network_scrape,
+    }
 
 
 if __name__ == "__main__":
     import sys
 
-    chem = sys.argv[1] if len(sys.argv) > 1 else "Carbendazim 50% WP"
-    matches = get_brand(chem)
+    chem = sys.argv[1] if len(sys.argv) > 1 else "Trichoderma viride"
+    result = get_brand(chem)
 
-    if not matches:
-        print(f"'{chem}' ka koi brand match nahi mila (internet/library issue ho sakta).")
-    for m in matches:
-        print(f"\nChemical : {m['chemical']}")
-        print(f"Brand    : {m.get('brand_name')}")
-        print(f"Company  : {m.get('company')}")
-        print(f"URL      : {m.get('product_url')}")
+    print(f"\nChemical queried : {result['chemical']}")
+    print(f"Resolved via     : {result['layer']}")
+
+    if result["brand_matches"]:
+        print(f"\nRetail brand matches found ({len(result['brand_matches'])}):")
+        for m in result["brand_matches"]:
+            print(f"  - Brand: {m.get('brand_name')} | Company: {m.get('company')} | {m.get('product_url')}")
+    else:
+        print(f"\n'{chem}' -- koi match nahi mila web scrape se.")

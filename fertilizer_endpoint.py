@@ -21,6 +21,27 @@ import sys
 import pathlib
 import logging
 from typing import Optional, List, Union
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        env_path = args[0] if args else kwargs.get("dotenv_path")
+        if not env_path or not os.path.exists(env_path):
+            return False
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                os.environ.setdefault(key, value)
+        return True
+
+load_dotenv(pathlib.Path(__file__).with_name(".env"))
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
