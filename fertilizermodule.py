@@ -386,7 +386,7 @@ def _simplify_chemical_for_search(chem_name: str) -> str:
     # 5. Collapse extra spaces
     return ' '.join(text.split()).strip()
 
-def fetch_live_brands_from_scraper(rows: list, overlap_keys: set = None, max_live_scrapes: int = 4) -> dict:
+def fetch_live_brands_from_scraper(rows: list, overlap_keys: set = None, max_live_scrapes: int = 2) -> dict:
     """
     1. Prioritizes 'Overlap' (Best Match) chemicals.
     2. Cleans the string FIRST to guarantee high SEO match rates.
@@ -691,11 +691,17 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "brands": brands,
             "companies": companies,
             "has_brand_info": (len(brands) > 0) or (len(companies) > 0),
-            "diy_homemade_options": get_diy_matches(chem_name, pest_norm, category),
+            "diy_homemade_options": [],  # filled in AFTER the loop, once pests_covered is complete
         }
 
     for entry in seen_chem_keys.values():
         entry["pests_covered"] = list(entry["pests_covered"])
+        # Recompute using the FULL pest list now that duplicate rows are merged --
+        # fixes the bug where only the first pest row was ever passed to the matcher.
+        all_pests_str = " ".join(entry["pests_covered"])
+        entry["diy_homemade_options"] = get_diy_matches(
+            entry["chemical_name"], all_pests_str, entry["category"]
+        )
 
     all_entries = list(seen_chem_keys.values())
 
@@ -744,7 +750,7 @@ if __name__ == "__main__":
     print("Testing Symptom Bypass (Layer 2 Fallback)")
     payload= {
   "crop": "cotton",
-  "pest": "jassids",
+  "pest": ["aphids", "whitefly"],
   "symptom": None,
   "category_intent": None,
   "missing_info": False
