@@ -212,7 +212,17 @@ def resolve_pest_keys_layer1(pest_input: str, conn: sqlite3.Connection) -> List[
         "सड": "root_rot", "sad": "root_rot", "root rot": "root_rot", "खोडाची सड": "stem_rot", "मूळ सडणे": "root_rot",
         "टिक्का": "tikka_disease", "tikka": "tikka_disease", "leaf spot": "leaf_spot", "ठिपके": "leaf_spot", "पानगळ": "tikka_disease",
         "मोझॅक": "mosaic_virus", "mosaic": "mosaic_virus", "ymv": "mosaic_virus", "पिवळा मोझॅक": "mosaic_virus", "पान आखडणे": "mosaic_virus", "चोंबडा": "mosaic_virus",
-        "फायटोफ्थोरा": "phytophthora_rot", "phytophthora": "phytophthora_rot"
+        "फायटोफ्थोरा": "phytophthora_rot", "phytophthora": "phytophthora_rot",# Add to INLINE_PEST_MAP in fertilizermodule.py:
+"मिली बग":       "mealy_bugs",    # cotton/grapes farmers say this
+"mili bug":       "mealy_bugs",
+"थ्रिप्स":       "thrips",        # voice-to-text renders Devanagari thrips
+"थ्रिप":          "thrips",
+"जांभळा डाग":    "purple_blotch", # kanda farmers, Nashik belt
+"jambal dag":     "purple_blotch",
+"तेल्या":         "bacterial_blight", # pomegranate farmers, Solapur belt
+"telya":          "bacterial_blight",
+"phytophthora_rot": "phytophthora_rot",  # underscore variant
+"phytophthora blight": "phytophthora_rot",
     }
     if pest_input_clean in INLINE_PEST_MAP:
         mapped_key = INLINE_PEST_MAP[pest_input_clean]
