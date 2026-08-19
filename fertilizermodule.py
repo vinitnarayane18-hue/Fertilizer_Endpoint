@@ -212,17 +212,7 @@ def resolve_pest_keys_layer1(pest_input: str, conn: sqlite3.Connection) -> List[
         "सड": "root_rot", "sad": "root_rot", "root rot": "root_rot", "खोडाची सड": "stem_rot", "मूळ सडणे": "root_rot",
         "टिक्का": "tikka_disease", "tikka": "tikka_disease", "leaf spot": "leaf_spot", "ठिपके": "leaf_spot", "पानगळ": "tikka_disease",
         "मोझॅक": "mosaic_virus", "mosaic": "mosaic_virus", "ymv": "mosaic_virus", "पिवळा मोझॅक": "mosaic_virus", "पान आखडणे": "mosaic_virus", "चोंबडा": "mosaic_virus",
-        "फायटोफ्थोरा": "phytophthora_rot", "phytophthora": "phytophthora_rot",# Add to INLINE_PEST_MAP in fertilizermodule.py:
-"मिली बग":       "mealy_bugs",    # cotton/grapes farmers say this
-"mili bug":       "mealy_bugs",
-"थ्रिप्स":       "thrips",        # voice-to-text renders Devanagari thrips
-"थ्रिप":          "thrips",
-"जांभळा डाग":    "purple_blotch", # kanda farmers, Nashik belt
-"jambal dag":     "purple_blotch",
-"तेल्या":         "bacterial_blight", # pomegranate farmers, Solapur belt
-"telya":          "bacterial_blight",
-"phytophthora_rot": "phytophthora_rot",  # underscore variant
-"phytophthora blight": "phytophthora_rot",
+        "फायटोफ्थोरा": "phytophthora_rot", "phytophthora": "phytophthora_rot"
     }
     if pest_input_clean in INLINE_PEST_MAP:
         mapped_key = INLINE_PEST_MAP[pest_input_clean]
@@ -551,6 +541,42 @@ def _clean_field(val) -> Optional[str]:
         return None
     return s
 
+# ── NEW (Fix 15): CIBRC label doses are always PER HECTARE. Indian farmers
+# almost always think in acres (1 hectare = 2.47 acres), and neither the DB
+# nor the formatter ever stated the unit basis -- a farmer applying a
+# hectare-calibrated dose to one acre would overdose by ~2.47x. Rather than
+# asking Gemini to do this division (risk of rounding/hallucination on a
+# safety-critical number), we compute it once here in Python and pass BOTH
+# values through -- the formatter only ever displays pre-computed numbers.
+_ACRE_PER_HECTARE = 2.47105
+
+def _convert_dose_to_acre(dose_str: Optional[str]) -> Optional[str]:
+    """
+    Converts a per-hectare dose/water string to an approximate per-acre
+    value, dividing every number in it by 2.47. Preserves ranges
+    ("625-750" -> "253-304") and combinations ("312+32" -> "126+13").
+    Returns None if there is nothing numeric to convert.
+    """
+    if not dose_str:
+        return None
+    nums = re.findall(r'\d+\.?\d*', dose_str)
+    if not nums:
+        return None
+
+    def _fmt(n: str) -> str:
+        val = float(n) / _ACRE_PER_HECTARE
+        return f"{val:.1f}" if val < 10 else str(round(val))
+
+    converted = [_fmt(n) for n in nums]
+
+    if len(nums) == 1:
+        return converted[0]
+    if '-' in dose_str or '–' in dose_str:  # hyphen or en-dash range
+        return f"{converted[0]}-{converted[-1]}"
+    if '+' in dose_str:
+        return " + ".join(converted)
+    return "-".join(converted)
+
 def _normalize_waiting(val) -> Optional[str]:
     s = _clean_field(val)
     if not s: return None
@@ -694,24 +720,21 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "dosage": {
                 "ai_dose": _clean_field(ai_dose),
                 "formulation_dose": _clean_field(form_dose),
+                "formulation_dose_per_acre": _convert_dose_to_acre(_clean_field(form_dose)),
                 "water_dilution": _clean_field(water),
+                "water_dilution_per_acre": _convert_dose_to_acre(_clean_field(water)),
                 "waiting_period": _normalize_waiting(waiting),
                 "application_method": _clean_field(method),
+                "dose_basis": "per_hectare",
             },
             "brands": brands,
             "companies": companies,
             "has_brand_info": (len(brands) > 0) or (len(companies) > 0),
-            "diy_homemade_options": [],  # filled in AFTER the loop, once pests_covered is complete
+            "diy_homemade_options": get_diy_matches(chem_name, pest_norm, category),
         }
 
     for entry in seen_chem_keys.values():
         entry["pests_covered"] = list(entry["pests_covered"])
-        # Recompute using the FULL pest list now that duplicate rows are merged --
-        # fixes the bug where only the first pest row was ever passed to the matcher.
-        all_pests_str = " ".join(entry["pests_covered"])
-        entry["diy_homemade_options"] = get_diy_matches(
-            entry["chemical_name"], all_pests_str, entry["category"]
-        )
 
     all_entries = list(seen_chem_keys.values())
 
@@ -759,8 +782,8 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
 if __name__ == "__main__":
     print("Testing Symptom Bypass (Layer 2 Fallback)")
     payload= {
-  "crop": "cotton",
-  "pest": ["aphids", "whitefly"],
+  "crop": "onion",
+  "pest": "Downy mildew",
   "symptom": None,
   "category_intent": None,
   "missing_info": False
