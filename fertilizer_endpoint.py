@@ -105,7 +105,7 @@ routes: dict[str, RouteConfig] = {
                 network=AVM_NETWORK,
                 pay_to=AVM_ADDRESS,
                 price=AssetAmount(
-                    amount=int(PROTECTION_PRICE),                         
+                    amount=PROTECTION_PRICE,                         
                     asset=USDC_ASA_ID, 
                     extra={"decimals": 6, "tag": "x402-global-challenge"},                           
                     
