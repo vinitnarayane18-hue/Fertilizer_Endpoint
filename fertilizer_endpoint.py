@@ -100,13 +100,15 @@ server.register_extension(bazaar_resource_server_extension)
 routes: dict[str, RouteConfig] = {
     "POST /fertilizer-info": RouteConfig(
         accepts=[
-            PaymentOption(
+            PaymentOption(                                        
                 scheme="exact",
                 network=AVM_NETWORK,
                 pay_to=AVM_ADDRESS,
                 price=AssetAmount(
-                    amount=PROTECTION_PRICE,
-                    asset=USDC_ASA_ID,
+                    amount=int(PROTECTION_PRICE),                         
+                    asset=USDC_ASA_ID, 
+                    extra={"decimals": 6, "tag": "x402-global-challenge"},                           
+                    
                 ),
                 extra={"name": "USDC", "decimals": 6, "tag": "x402-global-challenge"},
             ),
