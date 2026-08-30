@@ -374,7 +374,12 @@ def query_seed_treatments(crop_key: str, conn: sqlite3.Connection) -> List[tuple
                cp.is_combination, be.brand_names, be.companies
         FROM crop_protection cp
         LEFT JOIN brand_enrichment be ON cp.chemical_key = be.chemical_key
-        WHERE cp.crop_normalized = ? AND cp.category = 'seed_treatment'
+        WHERE cp.crop_normalized = ? 
+          AND (
+            cp.dose_application_method LIKE '%seed%'
+            OR cp.category LIKE '%seed%'
+            OR cp.waiting_period_days LIKE '%seed%'
+          )
         ORDER BY cp.chemical_name
     """
     cur.execute(query, [crop_key])
