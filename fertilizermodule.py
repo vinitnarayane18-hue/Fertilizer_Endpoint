@@ -364,6 +364,21 @@ def query_pgrs(crop_key: str, conn: sqlite3.Connection) -> List[tuple]:
     """
     cur.execute(query, [crop_key])
     return cur.fetchall()
+def query_seed_treatments(crop_key: str, conn: sqlite3.Connection) -> List[tuple]:
+    """Bypass query used when farmer asks for pre-sowing seed treatment."""
+    cur = conn.cursor()
+    query = """
+        SELECT cp.id, cp.crop_normalized, cp.pest_normalized, cp.chemical_key,
+               cp.chemical_name, cp.category, cp.ai_dose, cp.formulation_dose,
+               cp.water_dilution_l, cp.waiting_period_days, cp.dose_application_method,
+               cp.is_combination, be.brand_names, be.companies
+        FROM crop_protection cp
+        LEFT JOIN brand_enrichment be ON cp.chemical_key = be.chemical_key
+        WHERE cp.crop_normalized = ? AND cp.category = 'seed_treatment'
+        ORDER BY cp.chemical_name
+    """
+    cur.execute(query, [crop_key])
+    return cur.fetchall()
 
 # ── UTILS ─────────────────────────────────────────────────────────────────────
 
@@ -549,6 +564,17 @@ def _clean_field(val) -> Optional[str]:
 # safety-critical number), we compute it once here in Python and pass BOTH
 # values through -- the formatter only ever displays pre-computed numbers.
 _ACRE_PER_HECTARE = 2.47105
+def extract_first_number(val_str: str) -> Optional[float]:
+    """Safely extracts the first number from DB strings like '1000-1500'"""
+    if not val_str: return None
+    match = re.search(r'(\d+(?:\.\d+)?)', str(val_str))
+    return float(match.group(1)) if match else None
+
+def farmer_friendly_round(val: float) -> str:
+    """Rounds doses to safe, measurable cap sizes for 15L pumps."""
+    if val < 10: return str(round(val, 1))
+    elif val < 50: return str(round(val))
+    else: return str(round(val / 5) * 5)
 
 def _convert_dose_to_acre(dose_str: Optional[str]) -> Optional[str]:
     """
@@ -623,6 +649,9 @@ def get_protection_options(payload: dict, db_path: str = DB_PATH) -> dict:
     if isinstance(pests, str): pests = [pests]
     symptom = payload.get("symptom")
     category_intent = payload.get("category_intent")
+    
+    # 🚀 FIX: Force uppercase to prevent case-sensitivity bugs!
+    cat_intent_clean = (category_intent or "").strip().upper()
 
     conn = sqlite3.connect(db_path)
 
@@ -632,12 +661,19 @@ def get_protection_options(payload: dict, db_path: str = DB_PATH) -> dict:
         if not crop_key:
             return {"status": "crop_not_found", "message": f"Crop '{crop_input}' not found in database."}
 
-        # 2. PGR / Fertilizer Bypass Check
-        is_pgr_request = (category_intent == "PGR") or (not pests and not symptom)
+        # 2. Seed Treatment / PGR Bypass Check
+        is_seed_request = (cat_intent_clean == "SEED_TREATMENT")
         
+        # Only fallback to PGR if it's explicitly requested, OR if there's no pest/symptom AND it's not a seed request
+        is_pgr_request = (cat_intent_clean == "PGR") or (not pests and not symptom and not is_seed_request)
+        
+        if is_seed_request:
+            rows = query_seed_treatments(crop_key, conn)
+            live_brands = fetch_live_brands_from_scraper(rows, set())
+            return _format_payload_response(rows, crop_key, crop_display, ["Seed Treatment"], set(), live_brands=live_brands, is_seed=True)
+
         if is_pgr_request:
             rows = query_pgrs(crop_key, conn)
-            # Pass an empty set for PGRs
             live_brands = fetch_live_brands_from_scraper(rows, set())
             return _format_payload_response(rows, crop_key, crop_display, ["Growth Boosters"], set(), live_brands=live_brands, is_pgr=True)
 
@@ -687,7 +723,7 @@ def get_protection_options(payload: dict, db_path: str = DB_PATH) -> dict:
     finally:
         conn.close()
 
-def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, overlap_keys, live_brands=None, is_pgr=False, mapped_from_symptom=False) -> dict:
+def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, overlap_keys, live_brands=None, is_pgr=False, mapped_from_symptom=False, is_seed=False) -> dict:
     """Helper to process raw SQL rows into the nested JSON response format."""
     if not rows:
         return {"status": "no_match", "message": "No registered chemicals found for the criteria."}
@@ -698,7 +734,6 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
          ai_dose, form_dose, water, waiting, method, is_combo,
          brand_json, company_json) = row
 
-        # --- NEW: Inject scraped brands if they exist, else fallback to empty master DB ---
         if live_brands and chem_name in live_brands and (live_brands[chem_name]["brands"] or live_brands[chem_name]["companies"]):
             brands = live_brands[chem_name]["brands"]
             companies = live_brands[chem_name]["companies"]
@@ -710,6 +745,18 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             if pest_norm: seen_chem_keys[chem_key]["pests_covered"].add(pest_norm)
             continue
 
+        raw_form = _clean_field(form_dose)
+        raw_water = _clean_field(water)
+
+        # 🚀 15L PUMP MATH ENGINE
+        pump_15L = None
+        num_form = extract_first_number(raw_form)
+        num_water = extract_first_number(raw_water)
+        
+        # Calculate ratio: (Total Dose / Total Water) * 15L Pump
+        if num_form is not None and num_water is not None and num_water > 0:
+            pump_15L = farmer_friendly_round((num_form / num_water) * 15)
+
         seen_chem_keys[chem_key] = {
             "chemical_name": chem_name,
             "chemical_key": chem_key,
@@ -719,10 +766,11 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "pests_covered": {pest_norm} if pest_norm else set(),
             "dosage": {
                 "ai_dose": _clean_field(ai_dose),
-                "formulation_dose": _clean_field(form_dose),
-                "formulation_dose_per_acre": _convert_dose_to_acre(_clean_field(form_dose)),
-                "water_dilution": _clean_field(water),
-                "water_dilution_per_acre": _convert_dose_to_acre(_clean_field(water)),
+                "formulation_dose": raw_form,
+                "formulation_dose_per_acre": _convert_dose_to_acre(raw_form),
+                "water_dilution": raw_water,
+                "water_dilution_per_acre": _convert_dose_to_acre(raw_water),
+                "formulation_dose_per_15L_pump": pump_15L,  # Added to JSON!
                 "waiting_period": _normalize_waiting(waiting),
                 "application_method": _clean_field(method),
                 "dose_basis": "per_hectare",
@@ -744,8 +792,10 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
     chemicals_by_cat = {}
     for entry in all_entries:
         cat = entry["category"] or "other"
-        # Coerce PGR formatting
+        # 🚀 Coerce Formatting
         if is_pgr: cat = "pgr"
+        if is_seed: cat = "seed_treatment"
+        
         if cat not in chemicals_by_cat: chemicals_by_cat[cat] = []
         chemicals_by_cat[cat].append(entry)
 
@@ -763,12 +813,13 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "crop_display": crop_display,
             "targets_resolved": matched_pest_labels,
             "mapped_from_symptom": mapped_from_symptom,
-            "is_pgr_query": is_pgr
+            "is_pgr_query": is_pgr,
+            "is_seed_treatment_query": is_seed  # Added to JSON!
         },
         "recommendations": {
             "overlap_best_matches": overlap_entries[:3],
             **{cat: entries for cat, entries in chemicals_by_cat.items() 
-               if cat in ("insecticide", "bio_pesticide", "fungicide", "herbicide", "pgr")}
+               if cat in ("insecticide", "bio_pesticide", "fungicide", "herbicide", "pgr", "seed_treatment")}
         },
         "summary": {
             "total_options": len(all_entries),
@@ -776,7 +827,6 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "has_branded_options": any(e["has_brand_info"] for e in all_entries),
         }
     }
-
 # ── TEST RUNNER ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
