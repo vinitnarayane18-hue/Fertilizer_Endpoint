@@ -82,8 +82,8 @@ AVM_NETWORK: Network = os.getenv(
 # 3. Real USDC on Algorand Mainnet ASA ID: 31566704
 USDC_ASA_ID = os.getenv("USDC_ASA_ID", "31566704")
 
-# 4. Price targeted via absolute atomic micro-units ($0.04 USDC = 40000 micro-units)
-PROTECTION_PRICE = os.getenv("PROTECTION_PRICE_USDC", "40000")
+# 4. Price targeted via absolute atomic micro-units ($0.05 USDC = 50000 micro-units)
+PROTECTION_PRICE = os.getenv("PROTECTION_PRICE_USDC", "50000")
 
 # ---------------------------------------------------------------------------
 # x402 server setup
@@ -246,7 +246,7 @@ async def index():
         "name": "AgriIntel Fertilizer API",
         "version": "1.0.0",
         "endpoint": "POST /fertilizer-info",
-        "price": "$0.04 USDC",
+        "price": "$0.05 USDC",
         "network": "Algorand mainnet",
         "payment": "x402 (X-PAYMENT header)",
         "coverage": "Maharashtra, India",
