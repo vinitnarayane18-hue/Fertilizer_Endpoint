@@ -2,7 +2,7 @@
 protectionendpoint.py (v1)
 -----------------------
 FastAPI route: POST /fertilizer-info
-x402-avm payment gate: $0.04 USDC on Algorand mainnet
+x402-avm payment gate: $0.1 USDC on Algorand mainnet
 
 Payment flow (M2M / direct x402):
     Any caller -> sends X-PAYMENT header with USDC tx
@@ -82,8 +82,8 @@ AVM_NETWORK: Network = os.getenv(
 # 3. Real USDC on Algorand Mainnet ASA ID: 31566704
 USDC_ASA_ID = os.getenv("USDC_ASA_ID", "31566704")
 
-# 4. Price targeted via absolute atomic micro-units ($0.05 USDC = 50000 micro-units)
-PROTECTION_PRICE = os.getenv("PROTECTION_PRICE_USDC", "50000")
+# 4. Price targeted via absolute atomic micro-units ($0.10 USDC = 100000 micro-units)
+PROTECTION_PRICE = os.getenv("PROTECTION_PRICE_USDC", "100000")
 
 # ---------------------------------------------------------------------------
 # x402 server setup
@@ -194,7 +194,7 @@ class CropProtectionRequest(BaseModel):
     "/fertilizer-info",
     responses={
         402: {
-            "description": "Payment Required. A cryptographically signed Algorand transaction proof for $0.04 USDC must be provided in the X-PAYMENT header."
+            "description": "Payment Required. A cryptographically signed Algorand transaction proof for $0.10 USDC must be provided in the X-PAYMENT header."
         }
     }
 )
@@ -203,7 +203,7 @@ async def crop_protection(request: Request, body: CropProtectionRequest):
     Returns net-profit optimized APMC markets, logistics vehicle recommendations,
     freight & deduction breakdowns, and AI execution rules for a given location.
 
-    Payment: $0.04 USDC via x402 header (Algorand mainnet)
+    Payment: $0.10 USDC via x402 header (Algorand mainnet)
     No API key required. No account needed.
     """
     # Convert Pydantic object to the pure dictionary payload our engine expects
@@ -234,7 +234,7 @@ async def crop_protection(request: Request, body: CropProtectionRequest):
 @app.get("/health")
 @app.head("/health")
 async def health():
-    return {"status": "ok", "endpoint": "fertilizer-info", "price_usdc": "0.04"}
+    return {"status": "ok", "endpoint": "fertilizer-info", "price_usdc": "0.10"}
 
 # ---------------------------------------------------------------------------
 # Discovery endpoint (unpaid - for Bazaar indexing)
@@ -246,7 +246,7 @@ async def index():
         "name": "AgriIntel Fertilizer API",
         "version": "1.0.0",
         "endpoint": "POST /fertilizer-info",
-        "price": "$0.05 USDC",
+        "price": "$0.10 USDC",
         "network": "Algorand mainnet",
         "payment": "x402 (X-PAYMENT header)",
         "coverage": "Maharashtra, India",
