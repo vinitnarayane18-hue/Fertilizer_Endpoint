@@ -22,6 +22,7 @@ from difflib import SequenceMatcher
 from typing import Optional, List, Tuple, Set, Dict
 import sys
 import os
+import asyncio
 
 try:
     from dotenv import load_dotenv
@@ -727,7 +728,63 @@ def get_protection_options(payload: dict, db_path: str = DB_PATH) -> dict:
 
     finally:
         conn.close()
+async def sanitize_dosages_with_ai(raw_recommendations: dict) -> dict:
+    """
+    🚀 LLM MIDDLEWARE: Sanitizes missing units from the database before returning to main.py.
+    """
+    import json
+    # Note: Ensure google.genai.types is imported at the top of fertilizermodule.py
+    
+    print("[Sanitizer] Sending messy DB payload to Gemini for unit deduction...")
+    
+    system_prompt = """You are an expert Agricultural Data Scientist. 
+Your job is to read an unclean JSON payload of chemical recommendations, deduce the correct missing units for the 'dosage' fields based on agronomic chemistry, and output a perfectly clean JSON object.
 
+RULES FOR UNIT DEDUCTION:
+1. SOLID vs LIQUID: 
+   - If chemical_name contains EC, SC, SL, OD, EW, CS, FS, AS, LF -> It is a LIQUID. Units must be 'L' or 'ml'.
+   - If chemical_name contains WP, WG, WDG, GR, SP, DF, WS, SG -> It is a SOLID. Units must be 'kg' or 'g'.
+2. MAGNITUDE (Acre/Hectare Doses):
+   - If the dose number is less than 10 (e.g., 0.5, 1.5, 3) -> It is 'kg' or 'L'.
+   - If the dose number is 10 or greater (e.g., 50, 150, 500) -> It is 'g' or 'ml'.
+3. KNAPSACK PUMP EXCEPTION:
+   - Pump doses ('formulation_dose_per_15L_pump') are ALWAYS 'g' or 'ml', regardless of the number. 1.5 for a pump means 1.5 ml/g, NOT 1.5 kg/L.
+4. PRE-EXISTING UNITS:
+   - If the raw string already contains a unit (e.g., "1.5 kg", "200 ml"), KEEP IT. Do not guess or override it.
+5. PRESERVE EXACT STRUCTURE:
+   - You MUST return the exact same JSON structure. Do not remove any chemicals or change any keys. Just append the units to the dosage values."""
+
+    try:
+        # Uses the global 'client' already defined at the top of fertilizermodule.py
+        response = await client.aio.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            contents=[
+                system_prompt,
+                f"CLEAN THIS JSON:\n{json.dumps(raw_recommendations, ensure_ascii=False)}"
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0.0, # Zero creativity, strict formatting
+                response_mime_type="application/json",
+            )
+        )
+        
+        # Verify it parsed correctly
+        cleaned_json = json.loads(response.text)
+        
+        # Safety Check: Did the LLM accidentally delete all our data?
+        if not cleaned_json or len(cleaned_json) == 0:
+            print("[Sanitizer WARNING] LLM returned empty JSON, falling back to raw data.")
+            return raw_recommendations
+            
+        print("[Sanitizer] Successfully cleaned units!")
+        return cleaned_json
+        
+    except Exception as e:
+        print(f"[Sanitizer ERROR] LLM failed, falling back to raw data: {e}")
+        # Fail-open: If the AI fails, return the raw data so the bot doesn't crash
+        return raw_recommendations
+
+    
 def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, overlap_keys, live_brands=None, is_pgr=False, mapped_from_symptom=False, is_seed=False) -> dict:
     """Helper to process raw SQL rows into the nested JSON response format."""
     if not rows:
@@ -753,14 +810,18 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
         raw_form = _clean_field(form_dose)
         raw_water = _clean_field(water)
 
-        # 🚀 15L PUMP MATH ENGINE
+# 🚀 15L PUMP MATH ENGINE
         pump_15L = None
         num_form = extract_first_number(raw_form)
         num_water = extract_first_number(raw_water)
         
-        # Calculate ratio: (Total Dose / Total Water) * 15L Pump
         if num_form is not None and num_water is not None and num_water > 0:
-            pump_15L = farmer_friendly_round((num_form / num_water) * 15)
+            # 🚀 MAGNITUDE FIX: If dose < 10, it's in kg/L. Multiply by 1000 to convert to g/ml.
+            actual_dose_g_ml = num_form * 1000 if num_form < 10 else num_form
+            
+            # Calculate ratio: (Total Dose (g/ml) / Total Water) * 15L Pump
+            raw_pump_val = (actual_dose_g_ml / num_water) * 15
+            pump_15L = farmer_friendly_round(raw_pump_val)
 
         seen_chem_keys[chem_key] = {
             "chemical_name": chem_name,
@@ -811,7 +872,7 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
     overlap_entries = [e for e in all_entries if e["covers_all_pests"]]
     overlap_entries.sort(key=sort_key)
 
-    return {
+    raw_payload = {
         "status": "success",
         "resolved_parameters": {
             "crop": crop_key,
@@ -819,7 +880,7 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "targets_resolved": matched_pest_labels,
             "mapped_from_symptom": mapped_from_symptom,
             "is_pgr_query": is_pgr,
-            "is_seed_treatment_query": is_seed  # Added to JSON!
+            "is_seed_treatment_query": is_seed 
         },
         "recommendations": {
             "overlap_best_matches": overlap_entries[:3],
@@ -832,6 +893,51 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "has_branded_options": any(e["has_brand_info"] for e in all_entries),
         }
     }
+# 🚀 INTERCEPT AND SANITIZE 🚀
+    import threading
+
+    def _run_sanitizer_in_thread(recs):
+        """Runs the async sanitizer inside a fresh, isolated event loop via a thread."""
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(sanitize_dosages_with_ai(recs))
+        finally:
+            new_loop.close()
+
+    try:
+        # Check if we are already in an event loop (FastAPI/Uvicorn)
+        try:
+            asyncio.get_running_loop()
+            in_loop = True
+        except RuntimeError:
+            in_loop = False
+
+        if in_loop:
+            # We are in FastAPI's loop. We cannot block it with asyncio.run().
+            # Spin up a daemon thread to run a fresh loop, block until it finishes.
+            result_container = {}
+            def worker():
+                try:
+                    result_container['data'] = _run_sanitizer_in_thread(raw_payload["recommendations"])
+                except Exception as e:
+                    print(f"[Sanitizer Thread Error]: {e}")
+
+            t = threading.Thread(target=worker)
+            t.start()
+            t.join() # Safely blocks the current thread while the daemon does the async work
+            clean_recommendations = result_container.get('data', raw_payload["recommendations"])
+        else:
+            # We are running via CLI or normal sync python script
+            clean_recommendations = asyncio.run(sanitize_dosages_with_ai(raw_payload["recommendations"]))
+
+        raw_payload["recommendations"] = clean_recommendations
+    except Exception as e:
+        print(f"[Sanitizer Bridge Error] Failed to execute async sanitizer: {e}")
+        # Fail open
+        pass
+
+    return raw_payload
 # ── TEST RUNNER ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
