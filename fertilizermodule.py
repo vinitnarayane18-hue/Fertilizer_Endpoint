@@ -22,7 +22,6 @@ from difflib import SequenceMatcher
 from typing import Optional, List, Tuple, Set, Dict
 import sys
 import os
-import asyncio
 
 try:
     from dotenv import load_dotenv
@@ -609,6 +608,57 @@ def _convert_dose_to_acre(dose_str: Optional[str]) -> Optional[str]:
         return " + ".join(converted)
     return "-".join(converted)
 
+# ── NEW (Fix 16): the raw DB dose strings are INCONSISTENT about units --
+# some rows embed the unit directly ("2.5kg", "1000gm", "500 mL"), others
+# store a bare number with no unit at all (e.g. "Copper oxychloride 50% WP"
+# -> formulation_dose="2.5", no "kg" suffix, even though its own WG sibling
+# row DOES say "...240g/100Ltr. water"). Guessing the unit purely from the
+# formulation-type letters (WP/WG -> grams, EC/SC -> ml) is NOT reliable --
+# "Copper oxychloride 50% WP" is genuinely dosed in KG, not grams, and the
+# LLM formatter has no way to know that on its own. So: extract whatever
+# unit IS present in the raw string first (that's real ground truth from
+# the CIBRC data); only fall back to a heuristic -- flagged low-confidence
+# -- when the raw string truly has no unit at all.
+_KNOWN_DOSE_UNITS = ["kg", "gm", "g", "ml", "l", "lt", "ltr"]
+_LIQUID_FORMULATION_TAGS = {"EC", "SC", "SL", "SE", "EW", "OD", "CS", "ZC", "FS"}
+_POWDER_FORMULATION_TAGS = {"WP", "WG", "WDG", "SP", "DP", "DF"}
+
+def _extract_dose_unit(raw_dose_str: Optional[str], chemical_name: str = "") -> Tuple[Optional[str], str]:
+    """
+    Returns (unit, confidence). confidence is 'high' when the unit came
+    straight from the raw DB text, 'low' when it had to be guessed.
+    A 'low' confidence result MUST be shown to the farmer with a
+    verify-the-label caution -- never printed as if it were certain.
+    """
+    if raw_dose_str:
+        s = raw_dose_str.lower()
+        for unit in _KNOWN_DOSE_UNITS:
+            if re.search(rf'\d\s*{unit}\b', s):
+                normalized = {"gm": "g", "lt": "l", "ltr": "l"}.get(unit, unit)
+                return normalized, "high"
+
+    # No unit in the raw string -- fall back to a best-effort guess.
+    name_upper = (chemical_name or "").upper()
+    fmt_type = None
+    for tag in _LIQUID_FORMULATION_TAGS | _POWDER_FORMULATION_TAGS:
+        if re.search(rf'\b{tag}\b', name_upper):
+            fmt_type = tag
+            break
+
+    if fmt_type in _LIQUID_FORMULATION_TAGS:
+        return "ml", "low"
+
+    if fmt_type in _POWDER_FORMULATION_TAGS:
+        nums = re.findall(r'\d+\.?\d*', raw_dose_str or "")
+        if nums and max(float(n) for n in nums) < 20:
+            # a full-hectare powder dose under 20 units is essentially
+            # never realistically "grams" -- almost certainly kg
+            return "kg", "low"
+        return "g", "low"
+
+    return None, "low"  # totally unknown -- do not guess a unit at all
+
+
 def _normalize_waiting(val) -> Optional[str]:
     s = _clean_field(val)
     if not s: return None
@@ -728,66 +778,7 @@ def get_protection_options(payload: dict, db_path: str = DB_PATH) -> dict:
 
     finally:
         conn.close()
-async def sanitize_dosages_with_ai(raw_recommendations: dict) -> dict:
-    """
-    🚀 LLM MIDDLEWARE: Sanitizes missing units from the database before returning to main.py.
-    """
-    import json
-    # Note: Ensure google.genai.types is imported at the top of fertilizermodule.py
-    
-    print("[Sanitizer] Sending messy DB payload to Gemini for unit deduction...")
-    
-    system_prompt = """You are an expert Agricultural Data Scientist. 
-Your job is to read an unclean JSON payload of chemical recommendations, deduce the correct missing units for the 'dosage' fields based on agronomic chemistry, and output a perfectly clean JSON object.
 
-RULES FOR UNIT DEDUCTION:
-1. SEED TREATMENT OVERRIDE (CRITICAL):
-   - If 'dose_basis' is 'per_kg_seed' or 'application_method' contains 'seed', the formulation dose is ALWAYS 'g' or 'ml' (e.g., 3 means 3 g or 3 ml). NEVER use 'kg' or 'L'. Ignore the magnitude rule completely.
-2. SOLID vs LIQUID: 
-   - If chemical_name contains EC, SC, SL, OD, EW, CS, FS, AS, LF -> It is a LIQUID ('L' or 'ml').
-   - If chemical_name contains WP, WG, WDG, GR, SP, DF, WS, SG, FF -> It is a SOLID ('kg' or 'g').
-3. MAGNITUDE (Acre/Hectare Doses ONLY):
-   - For regular field sprays: If the dose number is less than 10 (e.g., 0.5, 3) -> It is 'kg' or 'L'. If 10 or greater (e.g., 50, 500) -> It is 'g' or 'ml'.
-4. KNAPSACK PUMP EXCEPTION:
-   - Pump doses ('formulation_dose_per_15L_pump') are ALWAYS 'g' or 'ml', regardless of the number.
-5. PRE-EXISTING UNITS:
-   - If the raw string already contains a unit (e.g., "1.5 kg", "200 ml"), KEEP IT. Do not guess or override it.
-6. PRESERVE EXACT STRUCTURE & FORMAT:
-   - You MUST return the exact same JSON structure. Do not remove any chemicals or change any keys. 
-   - However, for the dosage fields ('formulation_dose', 'formulation_dose_per_acre', 'water_dilution', 'water_dilution_per_acre', 'formulation_dose_per_15L_pump'), you MUST change the string into an object containing 'value' and 'unit'. 
-   - Example: "formulation_dose": "1.5 kg" becomes "formulation_dose": {"value": "1.5", "unit": "kg"}. If a value is null, leave it null."""
-
-    try:
-        # Uses the global 'client' already defined at the top of fertilizermodule.py
-        response = await client.aio.models.generate_content(
-            model="gemini-3.1-flash-lite",
-            contents=[
-                system_prompt,
-                f"CLEAN THIS JSON:\n{json.dumps(raw_recommendations, ensure_ascii=False)}"
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.0, # Zero creativity, strict formatting
-                response_mime_type="application/json",
-            )
-        )
-        
-        # Verify it parsed correctly
-        cleaned_json = json.loads(response.text)
-        
-        # Safety Check: Did the LLM accidentally delete all our data?
-        if not cleaned_json or len(cleaned_json) == 0:
-            print("[Sanitizer WARNING] LLM returned empty JSON, falling back to raw data.")
-            return raw_recommendations
-            
-        print("[Sanitizer] Successfully cleaned units!")
-        return cleaned_json
-        
-    except Exception as e:
-        print(f"[Sanitizer ERROR] LLM failed, falling back to raw data: {e}")
-        # Fail-open: If the AI fails, return the raw data so the bot doesn't crash
-        return raw_recommendations
-
-    
 def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, overlap_keys, live_brands=None, is_pgr=False, mapped_from_symptom=False, is_seed=False) -> dict:
     """Helper to process raw SQL rows into the nested JSON response format."""
     if not rows:
@@ -813,19 +804,14 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
         raw_form = _clean_field(form_dose)
         raw_water = _clean_field(water)
 
-# 🚀 DETECT SEED TREATMENT 
-        is_seed_chem = ("seed" in str(method).lower() or "seed" in str(category).lower() or is_seed)
-
-        # 🚀 15L PUMP MATH ENGINE (Bypass for Seeds!)
+        # 🚀 15L PUMP MATH ENGINE
         pump_15L = None
         num_form = extract_first_number(raw_form)
         num_water = extract_first_number(raw_water)
         
-        # Only calculate pump ratios for field sprays!
-        if not is_seed_chem and num_form is not None and num_water is not None and num_water > 0:
-            actual_dose_g_ml = num_form * 1000 if num_form < 10 else num_form
-            raw_pump_val = (actual_dose_g_ml / num_water) * 15
-            pump_15L = farmer_friendly_round(raw_pump_val)
+        # Calculate ratio: (Total Dose / Total Water) * 15L Pump
+        if num_form is not None and num_water is not None and num_water > 0:
+            pump_15L = farmer_friendly_round((num_form / num_water) * 15)
 
         seen_chem_keys[chem_key] = {
             "chemical_name": chem_name,
@@ -837,21 +823,21 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "dosage": {
                 "ai_dose": _clean_field(ai_dose),
                 "formulation_dose": raw_form,
-                # Bypass Acre math if it's a seed treatment!
-                "formulation_dose_per_acre": _convert_dose_to_acre(raw_form) if not is_seed_chem else None,
+                "formulation_dose_per_acre": _convert_dose_to_acre(raw_form),
+                "dose_unit": _extract_dose_unit(raw_form, chem_name)[0],
+                "dose_unit_confidence": _extract_dose_unit(raw_form, chem_name)[1],
                 "water_dilution": raw_water,
-                "water_dilution_per_acre": _convert_dose_to_acre(raw_water) if not is_seed_chem else None,
-                "formulation_dose_per_15L_pump": pump_15L,
+                "water_dilution_per_acre": _convert_dose_to_acre(raw_water),
+                "formulation_dose_per_15L_pump": pump_15L,  # Added to JSON!
                 "waiting_period": _normalize_waiting(waiting),
                 "application_method": _clean_field(method),
-                # Correct the dose basis!
-                "dose_basis": "per_kg_seed" if is_seed_chem else "per_hectare",
+                "dose_basis": "per_hectare",
             },
             "brands": brands,
             "companies": companies,
             "has_brand_info": (len(brands) > 0) or (len(companies) > 0),
             "diy_homemade_options": get_diy_matches(chem_name, pest_norm, category),
-        } 
+        }
 
     for entry in seen_chem_keys.values():
         entry["pests_covered"] = list(entry["pests_covered"])
@@ -878,7 +864,7 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
     overlap_entries = [e for e in all_entries if e["covers_all_pests"]]
     overlap_entries.sort(key=sort_key)
 
-    raw_payload = {
+    return {
         "status": "success",
         "resolved_parameters": {
             "crop": crop_key,
@@ -886,7 +872,7 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "targets_resolved": matched_pest_labels,
             "mapped_from_symptom": mapped_from_symptom,
             "is_pgr_query": is_pgr,
-            "is_seed_treatment_query": is_seed 
+            "is_seed_treatment_query": is_seed  # Added to JSON!
         },
         "recommendations": {
             "overlap_best_matches": overlap_entries[:3],
@@ -899,59 +885,14 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "has_branded_options": any(e["has_brand_info"] for e in all_entries),
         }
     }
-# 🚀 INTERCEPT AND SANITIZE 🚀
-    import threading
-
-    def _run_sanitizer_in_thread(recs):
-        """Runs the async sanitizer inside a fresh, isolated event loop via a thread."""
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        try:
-            return new_loop.run_until_complete(sanitize_dosages_with_ai(recs))
-        finally:
-            new_loop.close()
-
-    try:
-        # Check if we are already in an event loop (FastAPI/Uvicorn)
-        try:
-            asyncio.get_running_loop()
-            in_loop = True
-        except RuntimeError:
-            in_loop = False
-
-        if in_loop:
-            # We are in FastAPI's loop. We cannot block it with asyncio.run().
-            # Spin up a daemon thread to run a fresh loop, block until it finishes.
-            result_container = {}
-            def worker():
-                try:
-                    result_container['data'] = _run_sanitizer_in_thread(raw_payload["recommendations"])
-                except Exception as e:
-                    print(f"[Sanitizer Thread Error]: {e}")
-
-            t = threading.Thread(target=worker)
-            t.start()
-            t.join() # Safely blocks the current thread while the daemon does the async work
-            clean_recommendations = result_container.get('data', raw_payload["recommendations"])
-        else:
-            # We are running via CLI or normal sync python script
-            clean_recommendations = asyncio.run(sanitize_dosages_with_ai(raw_payload["recommendations"]))
-
-        raw_payload["recommendations"] = clean_recommendations
-    except Exception as e:
-        print(f"[Sanitizer Bridge Error] Failed to execute async sanitizer: {e}")
-        # Fail open
-        pass
-
-    return raw_payload
 # ── TEST RUNNER ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("Testing Symptom Bypass (Layer 2 Fallback)")
     payload= {
-  "crop": "onion",
-  "pest": "Downy mildew",
-  "symptom": None,
+  "crop": "tur",
+  "pest": None,
+  "symptom": "tur madhe gavat zal ahe ",
   "category_intent": None,
   "missing_info": False
 }
