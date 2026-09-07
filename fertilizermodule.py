@@ -741,18 +741,21 @@ async def sanitize_dosages_with_ai(raw_recommendations: dict) -> dict:
 Your job is to read an unclean JSON payload of chemical recommendations, deduce the correct missing units for the 'dosage' fields based on agronomic chemistry, and output a perfectly clean JSON object.
 
 RULES FOR UNIT DEDUCTION:
-1. SOLID vs LIQUID: 
-   - If chemical_name contains EC, SC, SL, OD, EW, CS, FS, AS, LF -> It is a LIQUID. Units must be 'L' or 'ml'.
-   - If chemical_name contains WP, WG, WDG, GR, SP, DF, WS, SG -> It is a SOLID. Units must be 'kg' or 'g'.
-2. MAGNITUDE (Acre/Hectare Doses):
-   - If the dose number is less than 10 (e.g., 0.5, 1.5, 3) -> It is 'kg' or 'L'.
-   - If the dose number is 10 or greater (e.g., 50, 150, 500) -> It is 'g' or 'ml'.
-3. KNAPSACK PUMP EXCEPTION:
-   - Pump doses ('formulation_dose_per_15L_pump') are ALWAYS 'g' or 'ml', regardless of the number. 1.5 for a pump means 1.5 ml/g, NOT 1.5 kg/L.
-4. PRE-EXISTING UNITS:
+1. SEED TREATMENT OVERRIDE (CRITICAL):
+   - If 'dose_basis' is 'per_kg_seed' or 'application_method' contains 'seed', the formulation dose is ALWAYS 'g' or 'ml' (e.g., 3 means 3 g or 3 ml). NEVER use 'kg' or 'L'. Ignore the magnitude rule completely.
+2. SOLID vs LIQUID: 
+   - If chemical_name contains EC, SC, SL, OD, EW, CS, FS, AS, LF -> It is a LIQUID ('L' or 'ml').
+   - If chemical_name contains WP, WG, WDG, GR, SP, DF, WS, SG, FF -> It is a SOLID ('kg' or 'g').
+3. MAGNITUDE (Acre/Hectare Doses ONLY):
+   - For regular field sprays: If the dose number is less than 10 (e.g., 0.5, 3) -> It is 'kg' or 'L'. If 10 or greater (e.g., 50, 500) -> It is 'g' or 'ml'.
+4. KNAPSACK PUMP EXCEPTION:
+   - Pump doses ('formulation_dose_per_15L_pump') are ALWAYS 'g' or 'ml', regardless of the number.
+5. PRE-EXISTING UNITS:
    - If the raw string already contains a unit (e.g., "1.5 kg", "200 ml"), KEEP IT. Do not guess or override it.
-5. PRESERVE EXACT STRUCTURE:
-   - You MUST return the exact same JSON structure. Do not remove any chemicals or change any keys. Just append the units to the dosage values."""
+6. PRESERVE EXACT STRUCTURE & FORMAT:
+   - You MUST return the exact same JSON structure. Do not remove any chemicals or change any keys. 
+   - However, for the dosage fields ('formulation_dose', 'formulation_dose_per_acre', 'water_dilution', 'water_dilution_per_acre', 'formulation_dose_per_15L_pump'), you MUST change the string into an object containing 'value' and 'unit'. 
+   - Example: "formulation_dose": "1.5 kg" becomes "formulation_dose": {"value": "1.5", "unit": "kg"}. If a value is null, leave it null."""
 
     try:
         # Uses the global 'client' already defined at the top of fertilizermodule.py
@@ -810,16 +813,17 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
         raw_form = _clean_field(form_dose)
         raw_water = _clean_field(water)
 
-# 🚀 15L PUMP MATH ENGINE
+# 🚀 DETECT SEED TREATMENT 
+        is_seed_chem = ("seed" in str(method).lower() or "seed" in str(category).lower() or is_seed)
+
+        # 🚀 15L PUMP MATH ENGINE (Bypass for Seeds!)
         pump_15L = None
         num_form = extract_first_number(raw_form)
         num_water = extract_first_number(raw_water)
         
-        if num_form is not None and num_water is not None and num_water > 0:
-            # 🚀 MAGNITUDE FIX: If dose < 10, it's in kg/L. Multiply by 1000 to convert to g/ml.
+        # Only calculate pump ratios for field sprays!
+        if not is_seed_chem and num_form is not None and num_water is not None and num_water > 0:
             actual_dose_g_ml = num_form * 1000 if num_form < 10 else num_form
-            
-            # Calculate ratio: (Total Dose (g/ml) / Total Water) * 15L Pump
             raw_pump_val = (actual_dose_g_ml / num_water) * 15
             pump_15L = farmer_friendly_round(raw_pump_val)
 
@@ -833,19 +837,21 @@ def _format_payload_response(rows, crop_key, crop_display, matched_pest_labels, 
             "dosage": {
                 "ai_dose": _clean_field(ai_dose),
                 "formulation_dose": raw_form,
-                "formulation_dose_per_acre": _convert_dose_to_acre(raw_form),
+                # Bypass Acre math if it's a seed treatment!
+                "formulation_dose_per_acre": _convert_dose_to_acre(raw_form) if not is_seed_chem else None,
                 "water_dilution": raw_water,
-                "water_dilution_per_acre": _convert_dose_to_acre(raw_water),
-                "formulation_dose_per_15L_pump": pump_15L,  # Added to JSON!
+                "water_dilution_per_acre": _convert_dose_to_acre(raw_water) if not is_seed_chem else None,
+                "formulation_dose_per_15L_pump": pump_15L,
                 "waiting_period": _normalize_waiting(waiting),
                 "application_method": _clean_field(method),
-                "dose_basis": "per_hectare",
+                # Correct the dose basis!
+                "dose_basis": "per_kg_seed" if is_seed_chem else "per_hectare",
             },
             "brands": brands,
             "companies": companies,
             "has_brand_info": (len(brands) > 0) or (len(companies) > 0),
             "diy_homemade_options": get_diy_matches(chem_name, pest_norm, category),
-        }
+        } 
 
     for entry in seen_chem_keys.values():
         entry["pests_covered"] = list(entry["pests_covered"])
