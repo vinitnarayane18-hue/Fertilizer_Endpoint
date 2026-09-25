@@ -96,7 +96,7 @@ def normalize_crop(crop: str) -> str:
 
     CROP_ALIASES = {
         "tamatar":     "tomato", "tamata":      "tomato",
-        "bhindi":      "bhindi", "okra":        "bhindi", "lady finger": "bhindi",
+        "bhindi":      "okra", "okra":        "okra", "lady finger": "okra",
         "kapas":       "cotton", "gahu":        "wheat",  "gehun":       "wheat",
         "tandul":      "rice",   "paddy":       "rice",   "bhat":        "rice",
         "makka":       "maize",  "corn":        "maize",
